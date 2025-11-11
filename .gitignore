@@ -33,7 +33,12 @@ build/
 .vscode/
 
 # Ignore Terraform binaries
-.terraform/
-*.tfstate
-*.tfstate.backup
-*.terraform.lock.hcl
+
+terraform-aws-prod/.terraform/
+terraform-aws-prod/terraform.tfstate
+terraform-aws-prod/terraform.tfstate.backup
+terraform-aws-prod/tfplan
+terraform-aws-prod/*.tfstate
+terraform-aws-prod/*.tfvars
+terraform-aws-prod/.terraform.lock.hcl
+
