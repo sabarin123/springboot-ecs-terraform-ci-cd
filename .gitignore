@@ -31,3 +31,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Ignore Terraform binaries
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.terraform.lock.hcl
