@@ -5,7 +5,7 @@ on:
     branches:
       - main
 
-# Top-level defaults (can be overridden by secrets/job envs)
+# top-level sane defaults (can be overridden by secrets)
 env:
   AWS_REGION: eu-north-1
   PROJECT_NAME: simplewebsiteapp
@@ -15,9 +15,10 @@ jobs:
   terraform:
     name: Terraform Apply
     runs-on: ubuntu-latest
-    # make runtime env available to steps as shell vars
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+      # do NOT try to reference env inside an expression here.
+      # Prefer secrets if provided, otherwise fall back to the top-level default literal
+      AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,8 +33,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # use secret or fallback to top-level env.rather than env context in expression
-          aws-region: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Terraform Init
         working-directory: ./terraform-aws-prod
@@ -44,11 +44,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform
     env:
-      # prefer secrets for sensitive / environment-specific values
-      AWS_REGION: ${{ secrets.AWS_REGION || env.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      ECR_REPO: ${{ env.ECR_REPO }}
-      PROJECT_NAME: ${{ env.PROJECT_NAME }}
+      AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID || '' }}
+      ECR_REPO: ${{ secrets.ECR_REPO || env.ECR_REPO }}    # safe: this expression uses top-level literal env.ECR_REPO
+      PROJECT_NAME: ${{ secrets.PROJECT_NAME || env.PROJECT_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,18 +66,18 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set image tag
-        id: vars
+        id: set_tag
         run: echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
 
       - name: Build Docker image, tag for ECR and export FULL_IMAGE
         run: |
-          # Use job env vars as shell variables
+          # Use job env vars available at runtime
           echo "Using AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION ECR_REPO=$ECR_REPO"
           docker build -t "${ECR_REPO}:${IMAGE_TAG}" .
           FULL_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
@@ -93,15 +92,16 @@ jobs:
           docker push "${FULL_IMAGE}"
 
       - name: Register new task definition with updated image
+        # DON'T try to set IMAGE_URI via ${{ }} — FULL_IMAGE is runtime env available in shell
         env:
-          CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
+          CLUSTER: "${{ env.PROJECT_NAME }}-cluster"   # this is read at parse time (top-level env)
           TASK_FAMILY: "${{ env.PROJECT_NAME }}-task"
-          CONTAINER_NAME: "app"
-          IMAGE_URI: ${{ env.FULL_IMAGE }}   # FULL_IMAGE was written into $GITHUB_ENV earlier
-          AWS_REGION: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+          CONTAINER_NAME: app
+          AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
         run: |
+          IMAGE_URI="${FULL_IMAGE}"   # use the runtime env var written into $GITHUB_ENV earlier
           echo "Registering task def with image: $IMAGE_URI"
-          TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY)
+          TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY --region "${AWS_REGION}")
           NEW_DEF=$(echo "$TASK_DEF_JSON" \
             | jq --arg IMG "$IMAGE_URI" \
                 '.taskDefinition
@@ -120,6 +120,6 @@ jobs:
         env:
           CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
           SERVICE: "${{ env.PROJECT_NAME }}-service"
-          AWS_REGION: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
         run: |
           aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment --region "${AWS_REGION}"
