@@ -9,7 +9,7 @@ env:
   AWS_REGION: eu-north-1
   PROJECT_NAME: simplewebsiteapp
   # ECR repo full URI (replace with your account id or set as secret)
-  ECR_REPO: simplewebsiteapp
+  ECR_REPO: "simplewebsiteapp"
 
 jobs:
   terraform:
