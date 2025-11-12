@@ -68,11 +68,17 @@ jobs:
       - name: Get AWS Account ID
         id: aws_account
         run: |
-          echo "AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+          echo "AWS_ACCOUNT_ID is $ACCOUNT_ID"
 
       - name: Set image tag
         id: vars
         run: echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Debug image URI
+        run: |
+          echo "IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
 
       - name: Build Docker image
         run: |
@@ -93,15 +99,17 @@ jobs:
           CONTAINER_NAME: "app"
           IMAGE_URI: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
         run: |
+          # remove any line breaks in IMAGE_URI
+          IMAGE_URI_CLEAN=$(echo "$IMAGE_URI" | tr -d '\n')
           # fetch current task definition JSON
           TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY)
-          # build new task definition with updated image
+          # build new task definition JSON with updated image
           NEW_DEF=$(echo "$TASK_DEF_JSON" \
-            | jq --arg IMG "$IMAGE_URI" \
+            | jq --arg IMG "$IMAGE_URI_CLEAN" \
                 '.taskDefinition
                  | { family: .family,
                      networkMode: .networkMode,
-                     containerDefinitions: (.containerDefinitions | map( .image = $IMG )),
+                     containerDefinitions: (.containerDefinitions | map(.image = $IMG)),
                      requiresCompatibilities: .requiresCompatibilities,
                      cpu: .cpu,
                      memory: .memory,
