@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: eu-north-1
   PROJECT_NAME: simplewebsiteapp
-  ECR_REPO: "simplewebsiteapp"  # repository name only
+  ECR_REPO: "simplewebsiteapp"   # <-- just the repo name
 
 jobs:
   terraform:
@@ -28,20 +28,21 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
         working-directory: ./terraform-aws-prod
         run: terraform init -input=false
 
-     # - name: Terraform Apply
-     #   working-directory: ./terraform-aws-prod
-     #   run: terraform apply -auto-approve
-
   build-and-deploy:
     name: Build, Push Image & Deploy to ECS
     runs-on: ubuntu-latest
     needs: terraform
+    env:
+      AWS_REGION: ${{ env.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}   # <- make sure this secret exists
+      ECR_REPO: ${{ env.ECR_REPO }}
+      PROJECT_NAME: ${{ env.PROJECT_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,56 +61,47 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Get AWS Account ID
-        id: aws_account
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
-          echo "AWS_ACCOUNT_ID is $ACCOUNT_ID"
 
       - name: Set image tag
         id: vars
         run: echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
 
-      - name: Debug image URI
-        run: |
-          echo "IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
-
       - name: Build Docker image
         run: |
+          # BUILD and tag locally with repo:tag
           docker build -t "${ECR_REPO}:${IMAGE_TAG}" .
-          docker tag "${ECR_REPO}:${IMAGE_TAG}" "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+          # FULL image URI
+          FULL_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+          # Tag for ECR push
+          docker tag "${ECR_REPO}:${IMAGE_TAG}" "$FULL_IMAGE"
+          echo "FULL_IMAGE=$FULL_IMAGE" >> $GITHUB_ENV
 
       - name: Push Docker image to ECR
         run: |
+          # create repo if missing
           aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${AWS_REGION}" || \
-          aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
-          docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+            aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
+          docker push "${FULL_IMAGE}"
 
-      - name: Register new ECS task definition with updated image
+      - name: Register new task definition with updated image
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
-          TASK_FAMILY: "${{ env.PROJECT_NAME }}-task"
+          AWS_REGION: ${{ env.AWS_REGION }}
+          CLUSTER: "${PROJECT_NAME}-cluster"
+          TASK_FAMILY: "${PROJECT_NAME}-task"
           CONTAINER_NAME: "app"
-          IMAGE_URI: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+          IMAGE_URI: "${{ env.FULL_IMAGE }}"   # <-- full URI with registry
         run: |
-          # remove any line breaks in IMAGE_URI
-          IMAGE_URI_CLEAN=$(echo "$IMAGE_URI" | tr -d '\n')
-          # fetch current task definition JSON
           TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY)
-          # build new task definition JSON with updated image
           NEW_DEF=$(echo "$TASK_DEF_JSON" \
-            | jq --arg IMG "$IMAGE_URI_CLEAN" \
+            | jq --arg IMG "$IMAGE_URI" \
                 '.taskDefinition
                  | { family: .family,
                      networkMode: .networkMode,
-                     containerDefinitions: (.containerDefinitions | map(.image = $IMG)),
+                     containerDefinitions: (.containerDefinitions | map( .image = $IMG )),
                      requiresCompatibilities: .requiresCompatibilities,
                      cpu: .cpu,
                      memory: .memory,
@@ -118,9 +110,9 @@ jobs:
           echo "$NEW_DEF" > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
 
-      - name: Force new ECS deployment
+      - name: Force new deployment (update service)
         env:
-          CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
-          SERVICE: "${{ env.PROJECT_NAME }}-service"
+          CLUSTER: "${PROJECT_NAME}-cluster"
+          SERVICE: "${PROJECT_NAME}-service"
         run: |
           aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment
