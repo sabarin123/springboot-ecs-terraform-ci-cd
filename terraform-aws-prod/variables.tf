@@ -25,3 +25,16 @@ variable "ecs_desired_count" {
 variable "container_port" {
   default = 8080
 }
+
+
+variable "db_name" {
+  default = "myappdb"
+}
+
+variable "db_username" {
+  default = "admin"
+}
+
+variable "db_password" {
+  default = "SuperSecurePass123!"
+}
