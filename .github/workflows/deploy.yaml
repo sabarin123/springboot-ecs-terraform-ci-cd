@@ -68,7 +68,7 @@ jobs:
 
       - name: Terraform Apply
         working-directory: ./terraform-aws-prod
-        #run: terraform apply -auto-approve tfplan
+       # run: terraform apply -auto-approve tfplan
 
   build-and-deploy:
     name: Build, Push Image & Deploy to ECS
