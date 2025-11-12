@@ -34,9 +34,9 @@ jobs:
         working-directory: ./terraform-aws-prod
         run: terraform init -input=false
 
-   #   - name: Terraform Apply
-   #     working-directory: ./terraform-aws-prod
-   #     run: terraform apply -auto-approve
+      - name: Terraform Apply
+        working-directory: ./terraform-aws-prod
+        run: terraform apply -auto-approve
 
   build-and-deploy:
     name: Build, Push Image & Deploy to ECS
