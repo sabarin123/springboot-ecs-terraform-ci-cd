@@ -5,7 +5,6 @@ on:
     branches:
       - main
 
-# Top-level defaults (will be used if secrets not provided)
 env:
   AWS_REGION: eu-north-1
   PROJECT_NAME: simplewebsiteapp
@@ -15,95 +14,37 @@ jobs:
   terraform:
     name: Terraform Apply
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Establish runtime env variables (prefer secrets, fallback to top-level defaults)
-      - name: Setup runtime env (prefer secrets, fallback to defaults)
-        run: |
-          # If secret provided use it, otherwise fallback to top-level env default
-          if [ -n "${{ secrets.AWS_REGION }}" ]; then
-            echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> $GITHUB_ENV
-          else
-            echo "AWS_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.AWS_ACCOUNT_ID }}" ]; then
-            echo "AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.ECR_REPO }}" ]; then
-            echo "ECR_REPO=${{ secrets.ECR_REPO }}" >> $GITHUB_ENV
-          else
-            echo "ECR_REPO=${{ env.ECR_REPO }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.PROJECT_NAME }}" ]; then
-            echo "PROJECT_NAME=${{ secrets.PROJECT_NAME }}" >> $GITHUB_ENV
-          else
-            echo "PROJECT_NAME=${{ env.PROJECT_NAME }}" >> $GITHUB_ENV
-          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: "1.6.0"
 
-      - name: Configure AWS credentials (for terraform job)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}   # this now comes from $GITHUB_ENV
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Terraform Init
         working-directory: ./terraform-aws-prod
         run: terraform init -input=false
 
-      - name: Terraform Plan
-        working-directory: ./terraform-aws-prod
-        run: terraform plan -out=tfplan
-
-    #  - name: Terraform Apply
-    #    working-directory: ./terraform-aws-prod
-    #   run: terraform apply -auto-approve tfplan
+   #   - name: Terraform Apply
+   #     working-directory: ./terraform-aws-prod
+   #     run: terraform apply -auto-approve
 
   build-and-deploy:
     name: Build, Push Image & Deploy to ECS
     runs-on: ubuntu-latest
     needs: terraform
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Ensure the runtime envs set in previous job's $GITHUB_ENV are present here too.
-      # We set them again here with the same pattern so this job can run independently if needed.
-      - name: Setup runtime env (prefer secrets, fallback to defaults)
-        run: |
-          if [ -n "${{ secrets.AWS_REGION }}" ]; then
-            echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> $GITHUB_ENV
-          else
-            echo "AWS_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.AWS_ACCOUNT_ID }}" ]; then
-            echo "AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.ECR_REPO }}" ]; then
-            echo "ECR_REPO=${{ secrets.ECR_REPO }}" >> $GITHUB_ENV
-          else
-            echo "ECR_REPO=${{ env.ECR_REPO }}" >> $GITHUB_ENV
-          fi
-
-          if [ -n "${{ secrets.PROJECT_NAME }}" ]; then
-            echo "PROJECT_NAME=${{ secrets.PROJECT_NAME }}" >> $GITHUB_ENV
-          else
-            echo "PROJECT_NAME=${{ env.PROJECT_NAME }}" >> $GITHUB_ENV
-          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -119,39 +60,43 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image tag
+      - name: Set image tags
         id: vars
-        run: echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
-
-      - name: Build Docker image, tag for ECR and export FULL_IMAGE
         run: |
-          echo "Using AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION ECR_REPO=$ECR_REPO"
-          docker build -t "${ECR_REPO}:${IMAGE_TAG}" .
-          FULL_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
-          docker tag "${ECR_REPO}:${IMAGE_TAG}" "${FULL_IMAGE}"
-          echo "FULL_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
+          echo "IMAGE_TAG_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
+          echo "IMAGE_TAG_VERSION=v1" >> $GITHUB_ENV
 
-      - name: Push Docker image to ECR
+      - name: Build Docker image and push to ECR
         run: |
-          echo "Pushing $FULL_IMAGE"
-          aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${AWS_REGION}" || \
-            aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
-          docker push "${FULL_IMAGE}"
+          echo "Using AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }} REGION=${{ secrets.AWS_REGION }}"
+          FULL_IMAGE_SHA="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${IMAGE_TAG_SHA}"
+          FULL_IMAGE_VERSION="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${IMAGE_TAG_VERSION}"
+          
+          # Build image
+          docker build -t "${{ env.ECR_REPO }}:${IMAGE_TAG_SHA}" .
+          docker tag "${{ env.ECR_REPO }}:${IMAGE_TAG_SHA}" "${FULL_IMAGE_SHA}"
+          docker tag "${{ env.ECR_REPO }}:${IMAGE_TAG_SHA}" "${FULL_IMAGE_VERSION}"
 
-      - name: Register new task definition with updated image
+          # Push both tags
+          docker push "${FULL_IMAGE_SHA}"
+          docker push "${FULL_IMAGE_VERSION}"
+
+          echo "FULL_IMAGE=${FULL_IMAGE_VERSION}" >> $GITHUB_ENV
+
+      - name: Register new ECS task definition with updated image
         env:
           CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
           TASK_FAMILY: "${{ env.PROJECT_NAME }}-task"
           CONTAINER_NAME: "app"
           IMAGE_URI: ${{ env.FULL_IMAGE }}
-          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          echo "Registering task def with image: $IMAGE_URI"
+          echo "Registering ECS task with image: $IMAGE_URI"
           TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY)
           NEW_DEF=$(echo "$TASK_DEF_JSON" \
             | jq --arg IMG "$IMAGE_URI" \
@@ -167,10 +112,10 @@ jobs:
           echo "$NEW_DEF" > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json --region "${AWS_REGION}"
 
-      - name: Force new deployment (update service)
+      - name: Force new ECS deployment
         env:
           CLUSTER: "${{ env.PROJECT_NAME }}-cluster"
           SERVICE: "${{ env.PROJECT_NAME }}-service"
-          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment --region "${AWS_REGION}"
