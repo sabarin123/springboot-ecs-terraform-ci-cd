@@ -71,12 +71,16 @@ jobs:
         run: echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
 
       - name: Build Docker image
-        working-directory: ./app
-        run: docker build -t "${{ env.ECR_REPO }}:${IMAGE_TAG}" .
+        run: |
+          docker build -t "${ECR_REPO}:${IMAGE_TAG}" .
+          docker tag "${ECR_REPO}:${IMAGE_TAG}" "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
 
-      - name: Push Docker image
-        working-directory: ./app
-        run: docker push "${{ env.ECR_REPO }}:${IMAGE_TAG}"
+      - name: Push Docker image to ECR
+        run: |
+            aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${AWS_REGION}" || \
+            aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
+            docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+
 
       - name: Register new task definition with updated image
         # create a JSON task definition based on the existing one and replace image
