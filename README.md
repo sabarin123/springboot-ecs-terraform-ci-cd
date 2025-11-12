@@ -1,0 +1,240 @@
+# 🚀 Spring Boot CI/CD Pipeline with AWS ECR, EC2, CloudWatch & Terraform
+
+## 📘 Project Overview
+This project demonstrates a **complete CI/CD pipeline** setup for a **Spring Boot application** using **AWS services** and **Terraform** for infrastructure automation.  
+The goal is to automate the build, containerization, deployment, and monitoring process in a production-ready cloud environment.
+
+---
+
+## 🏗️ Architecture Diagram
+Developer → GitHub → GitHub Actions (CI/CD) → AWS ECR → AWS EC2 → CloudWatch
+│
+└── Terraform (Infrastructure as Code)
+
+---
+
+## ⚙️ Technologies Used
+
+| Category | Tools / Services |
+|-----------|-----------------|
+| Backend | Spring Boot (Java 17) |
+| CI/CD | GitHub Actions |
+| Containerization | Docker |
+| Infrastructure as Code | Terraform |
+| Cloud Provider | AWS |
+| Monitoring | CloudWatch |
+| Version Control | Git & GitHub |
+
+---
+
+## 📁 Project Structure
+
+
+springboot-cicd-terraform/
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml              # GitHub Actions pipeline
+├── src/
+│   └── main/java/...              # Spring Boot source code
+├── terraform/
+│   ├── main.tf                    # Terraform main configuration file
+│   ├── variables.tf               # Variable definitions
+│   ├── outputs.tf                 # Output values (EC2 IP, etc.)
+│   ├── provider.tf                # AWS provider configuration
+│   └── userdata.sh                # Script to run Docker container on EC2
+├── Dockerfile                     # Docker image setup for Spring Boot
+├── pom.xml                        # Maven build file
+├── application.properties          # Application configurations
+└── README.md
+
+---
+
+## 🪜 Step-by-Step Implementation
+
+### 1️⃣ Prerequisites
+
+- AWS Account with admin access  
+- AWS CLI configured on your system  
+- Terraform installed (`terraform -v`)  
+- GitHub repository created  
+- Docker installed locally  
+- Java & Maven installed
+
+---
+
+### 2️⃣ Build and Dockerize Spring Boot App
+
+Create a Dockerfile in the project root:
+
+```dockerfile
+FROM openjdk:17-jdk-slim
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+Build the JAR file:
+mvn clean package -DskipTests
+
+Build Docker image locally:
+docker build -t springboot-cicd-app .
+
+Run locally to test:
+docker run -p 8080:8080 springboot-cicd-app
+
+
+3️⃣ Terraform Setup (Infrastructure as Code)
+Example: provider.tf
+provider "aws" {
+  region = var.region
+}
+
+Example: variables.tf
+variable "region" {
+  default = "eu-north-1"
+}
+
+variable "project_name" {
+  default = "springboot-cicd"
+}
+
+variable "vpc_cidr" {
+  default = "10.0.0.0/16"
+}
+
+Example: main.tf
+resource "aws_instance" "app_server" {
+  ami           = "ami-0c55b159cbfafe1f0" # Ubuntu AMI
+  instance_type = "t2.micro"
+  key_name      = "my-key"
+
+  user_data = file("${path.module}/userdata.sh")
+
+  tags = {
+    Name = "${var.project_name}-ec2"
+  }
+}
+
+Example: outputs.tf
+output "ec2_public_ip" {
+  value = aws_instance.app_server.public_ip
+}
+
+output "ec2_public_dns" {
+  value = aws_instance.app_server.public_dns
+}
+
+Initialize and deploy infrastructure:
+terraform init
+terraform plan
+terraform apply -auto-approve
+
+
+4️⃣ GitHub Actions (CI/CD Pipeline)
+Example: .github/workflows/ci-cd.yml
+name: Build and Deploy Spring Boot App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+
+      - name: Build Spring Boot App
+        run: mvn clean package -DskipTests
+
+      - name: Login to AWS ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ secrets.ECR_REPO }} .
+          docker tag ${{ secrets.ECR_REPO }}:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
+
+Required GitHub Secrets:
+Secret NameDescriptionAWS_ACCESS_KEY_IDAWS access keyAWS_SECRET_ACCESS_KEYAWS secret keyAWS_REGIONAWS region (e.g. eu-north-1)AWS_ACCOUNT_IDYour AWS account IDECR_REPOECR repository name
+
+5️⃣ Deploy Docker Image on EC2
+After EC2 is provisioned by Terraform, SSH into it:
+ssh -i "my-key.pem" ubuntu@<EC2_PUBLIC_IP>
+
+Run:
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com
+docker pull <AWS_ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com/<ECR_REPO>:latest
+docker run -d -p 8080:8080 <AWS_ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com/<ECR_REPO>:latest
+
+Verify:
+http://<EC2_PUBLIC_IP>:8080
+
+
+6️⃣ CloudWatch Monitoring
+
+
+Navigate to AWS → CloudWatch → Log Groups
+
+
+View logs generated by EC2
+
+
+Create alarms for instance health, CPU utilization, or application downtime.
+
+
+
+📊 Terraform Outputs Example
+Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+ec2_public_ip = "13.50.12.194"
+ec2_public_dns = "ec2-13-50-12-194.eu-north-1.compute.amazonaws.com"
+
+Access app using:
+http://13.50.12.194:8080
+
+
+🧠 Key Learnings
+✅ Implemented full CI/CD pipeline with GitHub Actions
+✅ Automated infrastructure provisioning with Terraform
+✅ Deployed Dockerized Spring Boot app to AWS EC2
+✅ Enabled CloudWatch monitoring and alerts
+✅ Followed Infrastructure as Code best practices
+
+🧩 Future Enhancements
+
+
+Add Application Load Balancer (ALB) for scalability
+
+
+Use RDS for persistent database storage
+
+
+Implement AWS Secrets Manager for credential management
+
+
+Integrate Auto Scaling Groups (ASG) for high availability
+
+
+Deploy using ECS or EKS for container orchestration
+
+
+
+👨‍💻 Author
+Sabari N
+Cloud & DevOps Engineer | AWS | Terraform | CI/CD | Spring Boot
+🔗 LinkedIn • GitHub
+
+📜 License
+This project is licensed under the MIT License.
+See the LICENSE file for details.
